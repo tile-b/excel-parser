@@ -1,0 +1,467 @@
+import { useState, useCallback } from 'react';
+import XLSX from 'xlsx-js-style';
+
+/**
+ * Isolated function for processing the parsed Excel data.
+ * This is where .map() and .filter() logic will be added later.
+ * 
+ * @param {Array} data - The array of objects parsed from the Excel file.
+ * @returns {Array} - The processed array of objects.
+ */
+const processData = (data) => {
+  if (data.length === 0) return data;
+
+  const rawHeader = data[0];
+  
+  // Dynamic header mapping
+  const findKey = (name) => Object.keys(rawHeader).find(k => 
+    String(rawHeader[k] || '').trim().toUpperCase() === name.toUpperCase()
+  );
+
+  const keys = {
+    BRUGDK: findKey('BRUGDK') || 'A',
+    STTUGDK: findKey('STTUGDK') || 'D',
+    NAZIV_MES_ISP: findKey('NAZIV_MES_ISP') || 'F',
+    MESTO_MES_ISP: findKey('MESTO_MES_ISP') || 'H',
+    DC: findKey('DC') || 'L',
+    OTPREMA: findKey('OTPREMA') || 'N',
+    SIFOJ: findKey('SIFOJ') || 'P',
+    BRUTOMASA: findKey('BRUTOMASA') || 'T',
+    PALETE: findKey('PALETE') || 'W',
+  };
+
+  const header = {
+    A: rawHeader[keys.BRUGDK],
+    F: rawHeader[keys.NAZIV_MES_ISP],
+    H: rawHeader[keys.MESTO_MES_ISP],
+    L: rawHeader[keys.DC],
+    N: rawHeader[keys.OTPREMA],
+    P: rawHeader[keys.SIFOJ],
+    T: rawHeader[keys.BRUTOMASA],
+    W: rawHeader[keys.PALETE]
+  };
+
+  const rows = data.slice(1).filter(row => {
+    // Column B (STTUGDK) should be 'O'
+    const isSTTUGDK_O = String(row[keys.STTUGDK] || '').trim().toUpperCase() === 'O';
+    // SIFOJ should NOT start with 6 (remove 6000+)
+    const isSIFOJ_6 = String(row[keys.SIFOJ] || '').trim().startsWith('6');
+    
+    return isSTTUGDK_O && !isSIFOJ_6;
+  });
+
+  // Reduce and Group by BRUGDK
+  const grouped = rows.reduce((acc, row) => {
+    const key = String(row[keys.BRUGDK] || '').trim();
+    if (!key) return acc;
+
+    if (!acc[key]) {
+      acc[key] = { 
+        A: row[keys.BRUGDK],
+        F: row[keys.NAZIV_MES_ISP],
+        H: row[keys.MESTO_MES_ISP],
+        L: row[keys.DC],
+        N: row[keys.OTPREMA],
+        P: row[keys.SIFOJ],
+        T: parseFloat(row[keys.BRUTOMASA]) || 0,
+        W: parseFloat(row[keys.PALETE]) || 0
+      };
+    } else {
+      acc[key].T += parseFloat(row[keys.BRUTOMASA]) || 0;
+      acc[key].W += parseFloat(row[keys.PALETE]) || 0;
+    }
+    return acc;
+  }, {});
+
+  const allGrouped = Object.values(grouped).map(row => ({
+    ...row,
+    T: Number(row.T.toFixed(2)),
+    W: Number(row.W.toFixed(2))
+  }));
+
+  const over1000 = allGrouped.filter(row => row.T >= 1000);
+  const under1000 = allGrouped.filter(row => row.T < 1000);
+
+  return { header, over1000, under1000 };
+};
+
+function App() {
+  const [file, setFile] = useState(null);
+  const [error, setError] = useState('');
+  const [processing, setProcessing] = useState(false);
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    validateAndSetFile(selectedFile);
+  };
+
+  const validateAndSetFile = (selectedFile) => {
+    setError('');
+    if (!selectedFile) return;
+
+    const isExcel = selectedFile.name.endsWith('.xlsx') || 
+                    selectedFile.name.endsWith('.xls') || 
+                    selectedFile.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+                    selectedFile.type === 'application/vnd.ms-excel';
+
+    if (!isExcel) {
+      setError('Please upload a valid Excel file (.xlsx or .xls)');
+      setFile(null);
+      return;
+    }
+
+    setFile(selectedFile);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const droppedFile = e.dataTransfer.files[0];
+    validateAndSetFile(droppedFile);
+  };
+
+  const handleProcess = async () => {
+    if (!file) return;
+
+    setProcessing(true);
+    setError('');
+
+    try {
+      const reader = new FileReader();
+      
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          
+          // Get the first sheet
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          
+          // Convert sheet to JSON
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: "A", range: 9 });
+          
+          // Process data
+          const { header: headerRow, over1000: dataRows, under1000: underRows } = processData(jsonData);
+          
+          // Create new workbook
+          const newWorkbook = XLSX.utils.book_new();
+
+          // Helper to create sheet with header, totals, and advanced styling
+          const createSheet = (rows) => {
+            const totalT = rows.reduce((sum, row) => sum + (Number(row.T) || 0), 0);
+            const totalW = rows.reduce((sum, row) => sum + (Number(row.W) || 0), 0);
+            
+            const totalRow = {
+              A: 'TOTAL',
+              T: Number(totalT.toFixed(2)),
+              W: Number(totalW.toFixed(2))
+            };
+
+            const sheetData = [headerRow, ...rows, totalRow];
+            const ws = XLSX.utils.json_to_sheet(sheetData, { skipHeader: true });
+
+            // Apply Advanced Styling
+            const range = XLSX.utils.decode_range(ws['!ref']);
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+              for (let C = range.s.c; C <= range.e.c; ++C) {
+                const cell_address = { c: C, r: R };
+                const cell_ref = XLSX.utils.encode_cell(cell_address);
+                if (!ws[cell_ref]) continue;
+
+                // Base style for all cells
+                ws[cell_ref].s = {
+                  font: { name: "Calibri", sz: 11 },
+                  alignment: { vertical: "center", horizontal: "left" },
+                  border: {
+                    top: { style: "thin", color: { rgb: "E2E8F0" } },
+                    bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+                    left: { style: "thin", color: { rgb: "E2E8F0" } },
+                    right: { style: "thin", color: { rgb: "E2E8F0" } }
+                  }
+                };
+
+                // 1. Header Styling (Blue background, White bold text)
+                if (R === 0) {
+                  ws[cell_ref].s.fill = { fgColor: { rgb: "2563EB" } }; // Blue-600
+                  ws[cell_ref].s.font = { color: { rgb: "FFFFFF" }, bold: true, sz: 11 };
+                  ws[cell_ref].s.alignment.horizontal = "center";
+                }
+                // 2. Total Row Styling (Light Gray, Bold)
+                else if (R === range.e.r) {
+                  ws[cell_ref].s.fill = { fgColor: { rgb: "F1F5F9" } }; // Slate-100
+                  ws[cell_ref].s.font.bold = true;
+                }
+                // 3. Row Striping (Alternate background color for readability)
+                else if (R % 2 === 0) {
+                  ws[cell_ref].s.fill = { fgColor: { rgb: "F8FAFC" } }; // Slate-50
+                }
+
+                // 4. Number Formatting (Thousand separators for T and W columns)
+                if (R > 0 && (C === 6 || C === 7)) {
+                  ws[cell_ref].z = '#,##0.00';
+                  ws[cell_ref].s.alignment.horizontal = "right";
+                }
+              }
+            }
+
+            // Add Auto-Filters
+            ws['!autofilter'] = { ref: ws['!ref'] };
+
+            // Set Column Widths for better visibility
+            ws['!cols'] = [
+              { wch: 15 }, // BRUGDK
+              { wch: 30 }, // NAZIV_MES_ISP
+              { wch: 20 }, // MESTO_MES_ISP
+              { wch: 8 },  // DC
+              { wch: 10 }, // OTPREMA
+              { wch: 10 }, // SIFOJ
+              { wch: 14 }, // BRUTOMASA
+              { wch: 10 }, // PALETE
+            ];
+
+            return ws;
+          };
+          
+          // Helper to create the Summary sheet with 3 tables
+          const buildSummarySheet = (over13, under13) => {
+            const dcs = ['BG', 'BP', 'PZ', 'NI'];
+            const ws = XLSX.utils.aoa_to_sheet([[]]);
+            
+            // 1. Calculate Stats
+            const overStats = dcs.map(dc => {
+              const rows = over13.filter(r => String(r.L || '').trim().toUpperCase() === dc);
+              return [dc, rows.reduce((s, r) => s + r.T, 0), rows.reduce((s, r) => s + r.W, 0)];
+            });
+            const tOverM = overStats.reduce((s, r) => s + r[1], 0);
+            const tOverP = overStats.reduce((s, r) => s + r[2], 0);
+
+            const underStats = dcs.map(dc => {
+              const rows = under13.filter(r => String(r.L || '').trim().toUpperCase() === dc);
+              return [dc, rows.reduce((s, r) => s + r.T, 0), rows.reduce((s, r) => s + r.W, 0)];
+            });
+            const tUnderM = underStats.reduce((s, r) => s + r[1], 0);
+            const tUnderP = underStats.reduce((s, r) => s + r[2], 0);
+
+            // 2. Build Tables
+            const table1 = [['LTL>1000kg', '', ''], ['DC', 'Bruto masa', 'Palete'], ...overStats, ['TOTAL', tOverM, tOverP]];
+            const table2 = [['LTL<1000kg', '', ''], ['DC', 'Bruto masa', 'Palete'], ...underStats, ['TOTAL', tUnderM, tUnderP]];
+            const table3 = [['LTL>1000kg in %', ''], ['DC', '%'], ...overStats.map(r => [r[0], tOverM > 0 ? r[1] / tOverM : 0])];
+
+            XLSX.utils.sheet_add_aoa(ws, table1, { origin: 'A1' });
+            XLSX.utils.sheet_add_aoa(ws, table2, { origin: 'E1' });
+            XLSX.utils.sheet_add_aoa(ws, table3, { origin: 'I1' });
+
+            // 3. Styling
+            const range = XLSX.utils.decode_range(ws['!ref']);
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+              for (let C = range.s.c; C <= range.e.c; ++C) {
+                const addr = XLSX.utils.encode_cell({ c: C, r: R });
+                if (!ws[addr]) continue;
+                
+                const isHeader = R === 1 || (R === 0 && ws[addr].v);
+                const isTotal = R === 6;
+
+                ws[addr].s = {
+                  font: { name: "Calibri", sz: 11, bold: isHeader || isTotal },
+                  alignment: { vertical: "center", horizontal: (C === 0 || C === 4 || C === 8) ? "left" : "right" },
+                  border: {
+                    top: { style: "thin", color: { rgb: "E2E8F0" } },
+                    bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+                    left: { style: "thin", color: { rgb: "E2E8F0" } },
+                    right: { style: "thin", color: { rgb: "E2E8F0" } }
+                  }
+                };
+
+                if (isHeader) {
+                  ws[addr].s.fill = { fgColor: { rgb: "2563EB" } };
+                  ws[addr].s.font.color = { rgb: "FFFFFF" };
+                  ws[addr].s.alignment.horizontal = "center";
+                } else if (isTotal) {
+                  ws[addr].s.fill = { fgColor: { rgb: "F1F5F9" } };
+                }
+
+                if (R > 1) {
+                  if ([1, 2, 5, 6].includes(C)) ws[addr].z = '#,##0.00';
+                  if (C === 9) ws[addr].z = '0.00%';
+                }
+              }
+            }
+
+            ws['!cols'] = [{ wch: 12 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 20 }, { wch: 10 }];
+            return ws;
+          };
+
+          const rows13 = dataRows.filter(row => String(row.N || '').trim().startsWith('13'));
+          const under13 = underRows.filter(row => String(row.N || '').trim().startsWith('13'));
+
+          // 0. Summary Sheet (First)
+          XLSX.utils.book_append_sheet(newWorkbook, buildSummarySheet(rows13, under13), 'TOTAL-LTL');
+
+          // 1. Main Sheet (Everything)
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(dataRows), 'All-Data');
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows13), '13-LTL');
+
+          // 3. DC Specific Sheets (Filtered from 13-LTL)
+          const dcList = ['BG', 'BP', 'PZ', 'NI'];
+          dcList.forEach(dc => {
+            const dcRows = rows13.filter(row => String(row.L || '').trim().toUpperCase() === dc);
+            XLSX.utils.book_append_sheet(newWorkbook, createSheet(dcRows), dc);
+          });
+
+          // 3. 14-FTL (Only Otprema 14)
+          const rows14 = dataRows.filter(row => String(row.N || '').trim().startsWith('14'));
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows14), '14-FTL');
+
+          // 4. 16-MINIFTL (Only Otprema 16)
+          const rows16 = dataRows.filter(row => String(row.N || '').trim().startsWith('16'));
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows16), '16-MINIFTL');
+          
+          // Export and download
+          const today = new Date().toISOString().split('T')[0];
+          XLSX.writeFile(newWorkbook, `LTL-${today}.xlsx`);
+          
+          setProcessing(false);
+        } catch (err) {
+          setError('Error processing file. Please ensure it is a valid Excel file.');
+          setProcessing(false);
+        }
+      };
+
+      reader.onerror = () => {
+        setError('Error reading file.');
+        setProcessing(false);
+      };
+
+      reader.readAsArrayBuffer(file);
+    } catch (err) {
+      setError('An unexpected error occurred.');
+      setProcessing(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
+      <div className="w-full max-w-xl bg-white rounded-3xl shadow-xl p-10 border border-slate-100">
+        <header className="text-center mb-10">
+          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight mb-2">
+            Excel Processor
+          </h1>
+          <p className="text-slate-500 text-lg">
+            Upload, process, and download your data instantly.
+          </p>
+        </header>
+
+        <main className="space-y-8">
+          {/* Drag & Drop Zone */}
+          <div
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            className={`
+              relative group cursor-pointer
+              border-2 border-dashed rounded-2xl p-12
+              flex flex-col items-center justify-center
+              transition-all duration-300 ease-in-out
+              ${file 
+                ? 'border-emerald-200 bg-emerald-50' 
+                : 'border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30'}
+            `}
+          >
+            <input
+              type="file"
+              accept=".xlsx, .xls"
+              onChange={handleFileChange}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+            
+            <div className={`
+              w-16 h-16 rounded-full flex items-center justify-center mb-4 transition-transform duration-300 group-hover:scale-110
+              ${file ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}
+            `}>
+              {file ? (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              )}
+            </div>
+
+            <div className="text-center">
+              {file ? (
+                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  <p className="text-emerald-700 font-semibold text-lg truncate max-w-xs mx-auto">
+                    {file.name}
+                  </p>
+                  <p className="text-emerald-600/70 text-sm">
+                    File ready for processing
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-slate-700 font-medium text-lg">
+                    Drag and drop your Excel file here
+                  </p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    or click to browse from your computer
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <div className="bg-rose-50 border border-rose-100 text-rose-600 px-4 py-3 rounded-xl text-sm flex items-start gap-3 animate-in fade-in zoom-in-95 duration-200">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Action Button */}
+          <button
+            onClick={handleProcess}
+            disabled={!file || processing}
+            className={`
+              w-full py-4 px-6 rounded-2xl font-bold text-lg shadow-lg transition-all duration-300
+              flex items-center justify-center gap-3
+              ${!file || processing
+                ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-[0.98]'}
+            `}
+          >
+            {processing ? (
+              <>
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Process & Download
+              </>
+            )}
+          </button>
+        </main>
+
+
+      </div>
+    </div>
+  );
+}
+
+export default App;
