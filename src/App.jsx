@@ -12,9 +12,9 @@ const processData = (data) => {
   if (data.length === 0) return data;
 
   const rawHeader = data[0];
-  
+
   // Dynamic header mapping
-  const findKey = (name) => Object.keys(rawHeader).find(k => 
+  const findKey = (name) => Object.keys(rawHeader).find(k =>
     String(rawHeader[k] || '').trim().toUpperCase() === name.toUpperCase()
   );
 
@@ -31,11 +31,9 @@ const processData = (data) => {
   };
 
   const header = {
-    A: rawHeader[keys.BRUGDK],
     F: rawHeader[keys.NAZIV_MES_ISP],
     H: rawHeader[keys.MESTO_MES_ISP],
     L: rawHeader[keys.DC],
-    N: rawHeader[keys.OTPREMA],
     P: rawHeader[keys.SIFOJ],
     T: rawHeader[keys.BRUTOMASA],
     W: rawHeader[keys.PALETE]
@@ -46,8 +44,10 @@ const processData = (data) => {
     const isSTTUGDK_O = String(row[keys.STTUGDK] || '').trim().toUpperCase() === 'O';
     // SIFOJ should NOT start with 6 (remove 6000+)
     const isSIFOJ_6 = String(row[keys.SIFOJ] || '').trim().startsWith('6');
-    
-    return isSTTUGDK_O && !isSIFOJ_6;
+    // OTPREMA should start with 13
+    const isOtprema13 = String(row[keys.OTPREMA] || '').trim().startsWith('13');
+
+    return isSTTUGDK_O && !isSIFOJ_6 && isOtprema13;
   });
 
   // Reduce and Group by BRUGDK
@@ -56,12 +56,10 @@ const processData = (data) => {
     if (!key) return acc;
 
     if (!acc[key]) {
-      acc[key] = { 
-        A: row[keys.BRUGDK],
+      acc[key] = {
         F: row[keys.NAZIV_MES_ISP],
         H: row[keys.MESTO_MES_ISP],
         L: row[keys.DC],
-        N: row[keys.OTPREMA],
         P: row[keys.SIFOJ],
         T: parseFloat(row[keys.BRUTOMASA]) || 0,
         W: parseFloat(row[keys.PALETE]) || 0
@@ -99,10 +97,10 @@ function App() {
     setError('');
     if (!selectedFile) return;
 
-    const isExcel = selectedFile.name.endsWith('.xlsx') || 
-                    selectedFile.name.endsWith('.xls') || 
-                    selectedFile.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-                    selectedFile.type === 'application/vnd.ms-excel';
+    const isExcel = selectedFile.name.endsWith('.xlsx') ||
+      selectedFile.name.endsWith('.xls') ||
+      selectedFile.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      selectedFile.type === 'application/vnd.ms-excel';
 
     if (!isExcel) {
       setError('Please upload a valid Excel file (.xlsx or .xls)');
@@ -133,22 +131,22 @@ function App() {
 
     try {
       const reader = new FileReader();
-      
+
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target.result);
           const workbook = XLSX.read(data, { type: 'array' });
-          
+
           // Get the first sheet
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
-          
+
           // Convert sheet to JSON
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: "A", range: 9 });
-          
+
           // Process data
           const { header: headerRow, over1000: dataRows, under1000: underRows } = processData(jsonData);
-          
+
           // Create new workbook
           const newWorkbook = XLSX.utils.book_new();
 
@@ -156,9 +154,9 @@ function App() {
           const createSheet = (rows) => {
             const totalT = rows.reduce((sum, row) => sum + (Number(row.T) || 0), 0);
             const totalW = rows.reduce((sum, row) => sum + (Number(row.W) || 0), 0);
-            
+
             const totalRow = {
-              A: 'TOTAL',
+              F: 'TOTAL',
               T: Number(totalT.toFixed(2)),
               W: Number(totalW.toFixed(2))
             };
@@ -179,10 +177,10 @@ function App() {
                   font: { name: "Calibri", sz: 11 },
                   alignment: { vertical: "center", horizontal: "left" },
                   border: {
-                    top: { style: "thin", color: { rgb: "E2E8F0" } },
-                    bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-                    left: { style: "thin", color: { rgb: "E2E8F0" } },
-                    right: { style: "thin", color: { rgb: "E2E8F0" } }
+                    top: { style: "thin", color: { rgb: "000000" } },
+                    bottom: { style: "thin", color: { rgb: "000000" } },
+                    left: { style: "thin", color: { rgb: "000000" } },
+                    right: { style: "thin", color: { rgb: "000000" } }
                   }
                 };
 
@@ -203,7 +201,7 @@ function App() {
                 }
 
                 // 4. Number Formatting (Thousand separators for T and W columns)
-                if (R > 0 && (C === 6 || C === 7)) {
+                if (R > 0 && (C === 4 || C === 5)) {
                   ws[cell_ref].z = '#,##0.00';
                   ws[cell_ref].s.alignment.horizontal = "right";
                 }
@@ -215,11 +213,9 @@ function App() {
 
             // Set Column Widths for better visibility
             ws['!cols'] = [
-              { wch: 15 }, // BRUGDK
               { wch: 30 }, // NAZIV_MES_ISP
               { wch: 20 }, // MESTO_MES_ISP
               { wch: 8 },  // DC
-              { wch: 10 }, // OTPREMA
               { wch: 10 }, // SIFOJ
               { wch: 14 }, // BRUTOMASA
               { wch: 10 }, // PALETE
@@ -227,12 +223,12 @@ function App() {
 
             return ws;
           };
-          
+
           // Helper to create the Summary sheet with 3 tables
-          const buildSummarySheet = (over13, under13) => {
+          const buildSummarySheet = (over13, all13) => {
             const dcs = ['BG', 'BP', 'PZ', 'NI'];
             const ws = XLSX.utils.aoa_to_sheet([[]]);
-            
+
             // 1. Calculate Stats
             const overStats = dcs.map(dc => {
               const rows = over13.filter(r => String(r.L || '').trim().toUpperCase() === dc);
@@ -241,21 +237,28 @@ function App() {
             const tOverM = overStats.reduce((s, r) => s + r[1], 0);
             const tOverP = overStats.reduce((s, r) => s + r[2], 0);
 
-            const underStats = dcs.map(dc => {
-              const rows = under13.filter(r => String(r.L || '').trim().toUpperCase() === dc);
+            const allStats = dcs.map(dc => {
+              const rows = all13.filter(r => String(r.L || '').trim().toUpperCase() === dc);
               return [dc, rows.reduce((s, r) => s + r.T, 0), rows.reduce((s, r) => s + r.W, 0)];
             });
-            const tUnderM = underStats.reduce((s, r) => s + r[1], 0);
-            const tUnderP = underStats.reduce((s, r) => s + r[2], 0);
+            const tAllM = allStats.reduce((s, r) => s + r[1], 0);
+            const tAllP = allStats.reduce((s, r) => s + r[2], 0);
 
             // 2. Build Tables
-            const table1 = [['LTL>1000kg', '', ''], ['DC', 'Bruto masa', 'Palete'], ...overStats, ['TOTAL', tOverM, tOverP]];
-            const table2 = [['LTL<1000kg', '', ''], ['DC', 'Bruto masa', 'Palete'], ...underStats, ['TOTAL', tUnderM, tUnderP]];
-            const table3 = [['LTL>1000kg in %', ''], ['DC', '%'], ...overStats.map(r => [r[0], tOverM > 0 ? r[1] / tOverM : 0])];
+            const table1 = [['FINAL LTL', '', ''], ['DC', 'Bruto masa', 'Palete'], ...allStats, ['TOTAL', tAllM, tAllP]];
+            const table2 = [['LTL>1000kg', '', ''], ['DC', 'Bruto masa', 'Palete'], ...overStats, ['TOTAL', tOverM, tOverP]];
 
-            XLSX.utils.sheet_add_aoa(ws, table1, { origin: 'A1' });
-            XLSX.utils.sheet_add_aoa(ws, table2, { origin: 'E1' });
-            XLSX.utils.sheet_add_aoa(ws, table3, { origin: 'I1' });
+            // For Table 3, calculate % for each DC = over_mass / all_mass for that DC
+            const percRows = overStats.map((r, i) => {
+              const allMass = allStats[i][1];
+              return [r[0], allMass > 0 ? r[1] / allMass : 0];
+            });
+            const totalPerc = tAllM > 0 ? tOverM / tAllM : 0;
+            const table3 = [['LTL>1000kg(%)', ''], ['DC', '%'], ...percRows, ['TOTAL', totalPerc]];
+
+            XLSX.utils.sheet_add_aoa(ws, table1, { origin: 'A10' });
+            XLSX.utils.sheet_add_aoa(ws, table2, { origin: 'E10' });
+            XLSX.utils.sheet_add_aoa(ws, table3, { origin: 'I10' });
 
             // 3. Styling
             const range = XLSX.utils.decode_range(ws['!ref']);
@@ -263,69 +266,67 @@ function App() {
               for (let C = range.s.c; C <= range.e.c; ++C) {
                 const addr = XLSX.utils.encode_cell({ c: C, r: R });
                 if (!ws[addr]) continue;
-                
-                const isHeader = R === 1 || (R === 0 && ws[addr].v);
-                const isTotal = R === 6;
+
+                const isTitleRow = R === 9;
+                const isHeader = R === 10;
+                const isTotal = R === 15;
+                const isDC = (C === 0 || C === 4 || C === 8) && ['BG', 'BP', 'PZ', 'NI'].includes(String(ws[addr].v).toUpperCase());
+                const isNumber = typeof ws[addr].v === 'number';
+                const isTotalLabel = isTotal && (C === 0 || C === 4 || C === 8);
 
                 ws[addr].s = {
-                  font: { name: "Calibri", sz: 11, bold: isHeader || isTotal },
-                  alignment: { vertical: "center", horizontal: (C === 0 || C === 4 || C === 8) ? "left" : "right" },
-                  border: {
-                    top: { style: "thin", color: { rgb: "E2E8F0" } },
-                    bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-                    left: { style: "thin", color: { rgb: "E2E8F0" } },
-                    right: { style: "thin", color: { rgb: "E2E8F0" } }
-                  }
+                  font: { name: "Calibri", sz: 11, bold: isHeader || isTotal || isDC || isNumber },
+                  alignment: { vertical: "center", horizontal: (C === 0 || C === 4 || C === 8) ? "left" : "right" }
                 };
 
-                if (isHeader) {
+                if (!isTitleRow) {
+                  ws[addr].s.border = {
+                    top: { style: "thin", color: { rgb: "000000" } },
+                    bottom: { style: "thin", color: { rgb: "000000" } },
+                    left: { style: "thin", color: { rgb: "000000" } },
+                    right: { style: "thin", color: { rgb: "000000" } }
+                  };
+                }
+
+                if (isHeader || isDC || isTotalLabel) {
                   ws[addr].s.fill = { fgColor: { rgb: "2563EB" } };
                   ws[addr].s.font.color = { rgb: "FFFFFF" };
-                  ws[addr].s.alignment.horizontal = "center";
+                  if (isHeader) ws[addr].s.alignment.horizontal = "center";
                 } else if (isTotal) {
                   ws[addr].s.fill = { fgColor: { rgb: "F1F5F9" } };
                 }
 
-                if (R > 1) {
+                if (R > 10) {
                   if ([1, 2, 5, 6].includes(C)) ws[addr].z = '#,##0.00';
-                  if (C === 9) ws[addr].z = '0.00%';
+                  if (C === 9) ws[addr].z = '0%';
                 }
               }
             }
 
-            ws['!cols'] = [{ wch: 12 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 20 }, { wch: 10 }];
+            ws['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 8 }, { wch: 15 }, { wch: 10 }, { wch: 5 }, { wch: 8 }, { wch: 10 }];
             return ws;
           };
 
-          const rows13 = dataRows.filter(row => String(row.N || '').trim().startsWith('13'));
-          const under13 = underRows.filter(row => String(row.N || '').trim().startsWith('13'));
+          // Since all data is now LTL 13 (filtered in processData)
+          const all13 = [...dataRows, ...underRows];
 
           // 0. Summary Sheet (First)
-          XLSX.utils.book_append_sheet(newWorkbook, buildSummarySheet(rows13, under13), 'TOTAL-LTL');
+          XLSX.utils.book_append_sheet(newWorkbook, buildSummarySheet(dataRows, all13), 'TOTAL-LTL');
 
-          // 1. Main Sheet (Everything)
-          XLSX.utils.book_append_sheet(newWorkbook, createSheet(dataRows), 'All-Data');
-          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows13), '13-LTL');
+          // 1. Main Sheet (13-LTL)
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(dataRows), '13-LTL');
 
-          // 3. DC Specific Sheets (Filtered from 13-LTL)
+          // 2. DC Specific Sheets (Filtered from 13-LTL)
           const dcList = ['BG', 'BP', 'PZ', 'NI'];
           dcList.forEach(dc => {
-            const dcRows = rows13.filter(row => String(row.L || '').trim().toUpperCase() === dc);
+            const dcRows = dataRows.filter(row => String(row.L || '').trim().toUpperCase() === dc);
             XLSX.utils.book_append_sheet(newWorkbook, createSheet(dcRows), dc);
           });
 
-          // 3. 14-FTL (Only Otprema 14)
-          const rows14 = dataRows.filter(row => String(row.N || '').trim().startsWith('14'));
-          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows14), '14-FTL');
-
-          // 4. 16-MINIFTL (Only Otprema 16)
-          const rows16 = dataRows.filter(row => String(row.N || '').trim().startsWith('16'));
-          XLSX.utils.book_append_sheet(newWorkbook, createSheet(rows16), '16-MINIFTL');
-          
           // Export and download
           const today = new Date().toISOString().split('T')[0];
           XLSX.writeFile(newWorkbook, `LTL-${today}.xlsx`);
-          
+
           setProcessing(false);
         } catch (err) {
           setError('Error processing file. Please ensure it is a valid Excel file.');
@@ -367,8 +368,8 @@ function App() {
               border-2 border-dashed rounded-2xl p-12
               flex flex-col items-center justify-center
               transition-all duration-300 ease-in-out
-              ${file 
-                ? 'border-emerald-200 bg-emerald-50' 
+              ${file
+                ? 'border-emerald-200 bg-emerald-50'
                 : 'border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30'}
             `}
           >
@@ -378,7 +379,7 @@ function App() {
               onChange={handleFileChange}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
-            
+
             <div className={`
               w-16 h-16 rounded-full flex items-center justify-center mb-4 transition-transform duration-300 group-hover:scale-110
               ${file ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}
