@@ -39,48 +39,51 @@ const processData = (data) => {
     W: rawHeader[keys.PALETE]
   };
 
-  const rows = data.slice(1).filter(row => {
+  const validRows = data.slice(1).filter(row => {
     // Column B (STTUGDK) should be 'O'
-    const isSTTUGDK_O = String(row[keys.STTUGDK] || '').trim().toUpperCase() === 'O';
-    // SIFOJ should NOT start with 6 (remove 6000+)
-    const isSIFOJ_6 = String(row[keys.SIFOJ] || '').trim().startsWith('6');
-    // OTPREMA should start with 13
-    const isOtprema13 = String(row[keys.OTPREMA] || '').trim().startsWith('13');
-
-    return isSTTUGDK_O && !isSIFOJ_6 && isOtprema13;
+    return String(row[keys.STTUGDK] || '').trim().toUpperCase() === 'O';
   });
 
-  // Reduce and Group by BRUGDK
-  const grouped = rows.reduce((acc, row) => {
-    const key = String(row[keys.BRUGDK] || '').trim();
-    if (!key) return acc;
+  const groupRows = (rowsToGroup) => {
+    const grouped = rowsToGroup.reduce((acc, row) => {
+      const key = String(row[keys.BRUGDK] || '').trim();
+      if (!key) return acc;
 
-    if (!acc[key]) {
-      acc[key] = {
-        F: row[keys.NAZIV_MES_ISP],
-        H: row[keys.MESTO_MES_ISP],
-        L: row[keys.DC],
-        P: row[keys.SIFOJ],
-        T: parseFloat(row[keys.BRUTOMASA]) || 0,
-        W: parseFloat(row[keys.PALETE]) || 0
-      };
-    } else {
-      acc[key].T += parseFloat(row[keys.BRUTOMASA]) || 0;
-      acc[key].W += parseFloat(row[keys.PALETE]) || 0;
-    }
-    return acc;
-  }, {});
+      if (!acc[key]) {
+        acc[key] = {
+          F: row[keys.NAZIV_MES_ISP],
+          H: row[keys.MESTO_MES_ISP],
+          L: row[keys.DC],
+          P: row[keys.SIFOJ],
+          T: parseFloat(row[keys.BRUTOMASA]) || 0,
+          W: parseFloat(row[keys.PALETE]) || 0
+        };
+      } else {
+        acc[key].T += parseFloat(row[keys.BRUTOMASA]) || 0;
+        acc[key].W += parseFloat(row[keys.PALETE]) || 0;
+      }
+      return acc;
+    }, {});
 
-  const allGrouped = Object.values(grouped).map(row => ({
-    ...row,
-    T: Number(row.T.toFixed(2)),
-    W: Number(row.W.toFixed(2))
-  }));
+    return Object.values(grouped).map(row => ({
+      ...row,
+      T: Number(row.T.toFixed(2)),
+      W: Number(row.W.toFixed(2))
+    }));
+  };
 
-  const over1000 = allGrouped.filter(row => row.T >= 1000);
-  const under1000 = allGrouped.filter(row => row.T < 1000);
+  const rows13 = validRows.filter(row => String(row[keys.OTPREMA] || '').trim().startsWith('13'));
+  const all13 = groupRows(rows13);
+  const over1000_13 = all13.filter(row => row.T >= 1000);
+  const under1000_13 = all13.filter(row => row.T < 1000);
 
-  return { header, over1000, under1000 };
+  const rows14 = validRows.filter(row => String(row[keys.OTPREMA] || '').trim().startsWith('14'));
+  const all14 = groupRows(rows14);
+
+  const rows16 = validRows.filter(row => String(row[keys.OTPREMA] || '').trim().startsWith('16'));
+  const all16 = groupRows(rows16);
+
+  return { header, over1000_13, under1000_13, all13, all14, all16 };
 };
 
 function App() {
@@ -145,7 +148,7 @@ function App() {
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: "A", range: 9 });
 
           // Process data
-          const { header: headerRow, over1000: dataRows, under1000: underRows } = processData(jsonData);
+          const { header: headerRow, over1000_13: dataRows, all13, all14, all16 } = processData(jsonData);
 
           // Create new workbook
           const newWorkbook = XLSX.utils.book_new();
@@ -195,9 +198,13 @@ function App() {
                   ws[cell_ref].s.fill = { fgColor: { rgb: "F1F5F9" } }; // Slate-100
                   ws[cell_ref].s.font.bold = true;
                 }
-                // 3. Row Striping (Alternate background color for readability)
-                else if (R % 2 === 0) {
-                  ws[cell_ref].s.fill = { fgColor: { rgb: "F8FAFC" } }; // Slate-50
+                // 3. Row Striping (Alternate background colors for readability)
+                else {
+                  if (R % 2 !== 0) {
+                    ws[cell_ref].s.fill = { fgColor: { rgb: "BFDBFE" } }; // Light Blue 2 (Blue-200)
+                  } else {
+                    ws[cell_ref].s.fill = { fgColor: { rgb: "93C5FD" } }; // Light Blue 3 (Blue-300)
+                  }
                 }
 
                 // 4. Number Formatting (Thousand separators for T and W columns)
@@ -307,9 +314,6 @@ function App() {
             return ws;
           };
 
-          // Since all data is now LTL 13 (filtered in processData)
-          const all13 = [...dataRows, ...underRows];
-
           // 0. Summary Sheet (First)
           XLSX.utils.book_append_sheet(newWorkbook, buildSummarySheet(dataRows, all13), 'TOTAL-LTL');
 
@@ -322,6 +326,10 @@ function App() {
             const dcRows = dataRows.filter(row => String(row.L || '').trim().toUpperCase() === dc);
             XLSX.utils.book_append_sheet(newWorkbook, createSheet(dcRows), dc);
           });
+
+          // 3. 14 FTL and 16 MINI FTL Sheets
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(all14), '14 FTL');
+          XLSX.utils.book_append_sheet(newWorkbook, createSheet(all16), '16 MINI FTL');
 
           // Export and download
           const today = new Date().toISOString().split('T')[0];
