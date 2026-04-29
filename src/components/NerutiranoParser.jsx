@@ -25,10 +25,11 @@ const processData = (data) => {
 
   const header = {
     A: rawHeader[keys.DC],
-    B: rawHeader[keys.DATUM_NASTANKA],
+    B: 'DATUM',
     C: rawHeader[keys.NAZIV_MESTA],
-    D: 'BROJ MESTA ISPORUKE',
-    E: rawHeader[keys.MASA],
+    D: 'BROJ LOKALA',
+    E: rawHeader[keys.MESTO],
+    F: rawHeader[keys.MASA],
   };
 
   const groupedData = data.slice(1)
@@ -59,11 +60,12 @@ const processData = (data) => {
     }, {});
 
   const dataRows = Object.values(groupedData).map(row => ({
-    A: row.A,
+    A: String(row.A || '').replace('NECTAR DOO', '').trim(),
     B: row.B,
     C: row.C.join(' - '),
     D: row.C.length,
-    E: `${row.E} ${Math.round(row.F)} kg`
+    E: `${row.E}, Srbija`,
+    F: `${row.E} ${Math.round(row.F)} kg`
   }));
 
   return { header, dataRows };
@@ -175,6 +177,7 @@ export default function NerutiranoParser() {
               { wch: Math.max(String(headerRow.C || '').length, ...rows.map(r => String(r.C || '').length), 5) + 2 },
               { wch: Math.max(String(headerRow.D || '').length, ...rows.map(r => String(r.D || '').length), 5) + 2 },
               { wch: Math.max(String(headerRow.E || '').length, ...rows.map(r => String(r.E || '').length), 5) + 2 },
+              { wch: Math.max(String(headerRow.F || '').length, ...rows.map(r => String(r.F || '').length), 5) + 2 },
             ];
             ws['!cols'] = colWidths;
 
