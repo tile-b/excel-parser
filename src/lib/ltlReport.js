@@ -61,11 +61,18 @@ const sum = (rows, field) => rows.reduce((s, r) => s + r[field], 0);
 const dcOf = (row) => text(row.dc).toUpperCase();
 const byOtprema = (prefix) => (row) => text(row.otprema).startsWith(prefix);
 
-/** SIFOJ numeric codes mapped to their descriptive names. */
+/** SIFOJ numeric codes mapped to their descriptive names. Only these codes are shown in the report. */
 export const SIFOJ_NAMES = {
   '3800': 'Skladište BP',
   '4840': 'DC Beograd',
   '6800': 'Skladište Bujanovac',
+};
+
+/** Returns true if the SIFOJ code is one of the known/allowed codes. */
+const isKnownSifoj = (sifoj) => {
+  let code = text(sifoj);
+  if (code.endsWith('.0')) code = code.slice(0, -2);
+  return Object.prototype.hasOwnProperty.call(SIFOJ_NAMES, code);
 };
 
 /** Formats SIFOJ code with dash divider and meaning, e.g. 3800-Skladište BP */
@@ -258,6 +265,8 @@ const statsPerDcAndSifoj = (rows) =>
     const bySifoj = new Map();
     dcRows.forEach((r) => {
       const s = text(r.sifoj);
+      // Skip unknown SIFOJ codes — only 3800, 4840, 6800 are shown
+      if (!isKnownSifoj(s)) return;
       const acc = bySifoj.get(s) || { masa: 0, palete: 0 };
       acc.masa += r.masa;
       acc.palete += r.palete;
