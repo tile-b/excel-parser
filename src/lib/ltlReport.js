@@ -40,7 +40,9 @@ const DETAIL_NUMERIC = ['masa', 'palete'];
 const BLUE = '2563EB';
 const WHITE = 'FFFFFF';
 const GREY = 'F1F5F9';
+const GREY_SUBTOTAL = 'D9D9D9';
 const NUM_FMT = '#,##0.00';
+const INT_NUM_FMT = '#,##0';
 const PCT_FMT = '0%';
 
 const thinBorder = () => {
@@ -58,6 +60,22 @@ const round2 = (v) => Number(v.toFixed(2));
 const sum = (rows, field) => rows.reduce((s, r) => s + r[field], 0);
 const dcOf = (row) => text(row.dc).toUpperCase();
 const byOtprema = (prefix) => (row) => text(row.otprema).startsWith(prefix);
+
+/** SIFOJ numeric codes mapped to their descriptive names. */
+export const SIFOJ_NAMES = {
+  '3800': 'Skladište BP',
+  '4840': 'DC Beograd',
+  '6800': 'Skladište Bujanovac',
+};
+
+/** Formats SIFOJ code with dash divider and meaning, e.g. 3800-Skladište BP */
+export const formatSifoj = (sifoj) => {
+  let code = text(sifoj);
+  if (!code) return '';
+  if (code.endsWith('.0')) code = code.slice(0, -2);
+  const name = SIFOJ_NAMES[code];
+  return name ? `${code}-${name}` : code;
+};
 
 /** User-facing error (message is shown in the UI). */
 const userError = (message) => Object.assign(new Error(message), { userMessage: message });
@@ -189,12 +207,18 @@ const addTable = (ws, origin, { title, header, rows, total, formats = {}, align 
     const isTitle = i === 0;
     const isHeader = i === 1;
     const isTotal = i === aoa.length - 1;
+    const isSubtotal = !isTitle && !isHeader && !isTotal && line[0] === '' && line[1] === '';
+
+    if (isSubtotal) {
+      if (!ws['!rows']) ws['!rows'] = [];
+      ws['!rows'][origin.r + i] = { hpx: 20 };
+    }
 
     line.forEach((_, j) => {
       const cell = ws[XLSX.utils.encode_cell({ r: origin.r + i, c: origin.c + j })];
       if (!cell) return;
 
-      const isLabel = j === 0 && !isTitle && !isHeader;
+      const isLabel = j === 0 && !isTitle && !isHeader && !isSubtotal;
 
       cell.s = {
         font: { name: 'Calibri', sz: 11, bold: !isTitle },
@@ -207,6 +231,8 @@ const addTable = (ws, origin, { title, header, rows, total, formats = {}, align 
         cell.s.fill = { fgColor: { rgb: BLUE } };
         cell.s.font.color = { rgb: WHITE };
         if (isHeader) cell.s.alignment.horizontal = 'center';
+      } else if (isSubtotal) {
+        cell.s.fill = { fgColor: { rgb: GREY_SUBTOTAL } };
       } else if (isTotal) {
         cell.s.fill = { fgColor: { rgb: GREY } };
       }
@@ -225,24 +251,35 @@ const statsPerDc = (rows) =>
     return [dc, sum(dcRows, 'masa'), sum(dcRows, 'palete')];
   });
 
-/** Mass/pallet totals per DC + SIFOJ: [[dc, sifoj, masa, palete], ...] */
+/** Mass/pallet totals per DC + SIFOJ, plus DC sum total rows: [[dc, sifoj, masa, palete], ...] */
 const statsPerDcAndSifoj = (rows) =>
   DCS.flatMap((dc) => {
+    const dcRows = rows.filter((r) => dcOf(r) === dc);
     const bySifoj = new Map();
-    rows
-      .filter((r) => dcOf(r) === dc)
-      .forEach((r) => {
-        const s = text(r.sifoj);
-        const acc = bySifoj.get(s) || { masa: 0, palete: 0 };
-        acc.masa += r.masa;
-        acc.palete += r.palete;
-        bySifoj.set(s, acc);
-      });
+    dcRows.forEach((r) => {
+      const s = text(r.sifoj);
+      const acc = bySifoj.get(s) || { masa: 0, palete: 0 };
+      acc.masa += r.masa;
+      acc.palete += r.palete;
+      bySifoj.set(s, acc);
+    });
 
-    if (bySifoj.size === 0) return [[dc, '', 0, 0]];
-    return [...bySifoj.keys()]
+    const sifojEntries = [...bySifoj.keys()]
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      .map((s) => [dc, s, bySifoj.get(s).masa, bySifoj.get(s).palete]);
+      .map((s) => [dc, formatSifoj(s), round2(bySifoj.get(s).masa), round2(bySifoj.get(s).palete)]);
+
+    const dcMasa = round2(sum(dcRows, 'masa'));
+    const dcPalete = round2(sum(dcRows, 'palete'));
+    const totalRow = ['', '', dcMasa, dcPalete];
+
+    if (sifojEntries.length === 0) {
+      return [
+        [dc, '', 0, 0],
+        totalRow,
+      ];
+    }
+
+    return [...sifojEntries, totalRow];
   });
 
 const buildSummarySheet = (all13, over13) => {
@@ -290,11 +327,11 @@ const buildSummarySheet = (all13, over13) => {
     header: ['DC', 'SIFOJ', 'Bruto masa', 'Palete'],
     rows: statsPerDcAndSifoj(all13),
     total: ['TOTAL', '', allMasa, allPalete],
-    formats: { 2: NUM_FMT, 3: NUM_FMT },
+    formats: { 2: INT_NUM_FMT, 3: INT_NUM_FMT },
     align: { 1: 'center' },
   });
 
-  ws['!cols'] = [8, 15, 12, 10, 8, 15, 10, 5, 8, 10].map((wch) => ({ wch }));
+  ws['!cols'] = [12, 28, 14, 12, 8, 15, 10, 5, 8, 10].map((wch) => ({ wch }));
   return ws;
 };
 

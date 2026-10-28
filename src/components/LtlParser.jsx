@@ -2,11 +2,42 @@ import { useState } from 'react';
 import XLSX from 'xlsx-js-style';
 import { parseLtlFile, reportFileName } from '../lib/ltlReport';
 
-const formatNumber = (value) =>
-  Number(value || 0).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+const formatNumber = (value) => {
+  const rounded = Math.round(Number(value) || 0);
+  return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+};
+
+const splitSifoj = (sifoj) => {
+  const str = String(sifoj || '');
+  const dashIndex = str.indexOf('-');
+  if (dashIndex === -1) {
+    return { codePart: str, namePart: '' };
+  }
+  return {
+    codePart: str.slice(0, dashIndex + 1),
+    namePart: str.slice(dashIndex + 1),
+  };
+};
+
+const formatSifojHtml = (sifoj) => {
+  const { codePart, namePart } = splitSifoj(sifoj);
+  if (!namePart) return codePart;
+  return `<span style="color:#000000;">${codePart}</span><span style="color:#5F6368;">${namePart}</span>`;
+};
+
+const renderSifoj = (sifoj) => {
+  if (!sifoj) return null;
+  const { codePart, namePart } = splitSifoj(sifoj);
+  if (!namePart) {
+    return <span>{codePart}</span>;
+  }
+  return (
+    <>
+      <span className="text-black">{codePart}</span>
+      <span className="text-[#5F6368]">{namePart}</span>
+    </>
+  );
+};
 
 const buildClipboardPayload = (table) => {
   const tsvLines = [
@@ -27,15 +58,25 @@ const buildClipboardPayload = (table) => {
     .join('');
 
   const bodyRows = table.rows
-    .map(
-      ([dc, sifoj, masa, palete]) => `
+    .map(([dc, sifoj, masa, palete]) => {
+      const isSubtotal = !dc && !sifoj;
+      if (isSubtotal) {
+        return `
+        <tr style="height:20px;line-height:20px;">
+          <td style="${border}background:#D9D9D9;height:20px;padding:0 10px;font-weight:bold;text-align:left;"></td>
+          <td style="${border}background:#D9D9D9;height:20px;padding:0 10px;font-weight:bold;text-align:center;"></td>
+          <td style="${border}background:#D9D9D9;height:20px;padding:0 10px;font-weight:bold;text-align:right;">${formatNumber(masa)}</td>
+          <td style="${border}background:#D9D9D9;height:20px;padding:0 10px;font-weight:bold;text-align:right;">${formatNumber(palete)}</td>
+        </tr>`;
+      }
+      return `
         <tr>
           <td style="${border}background:#2563EB;color:#FFFFFF;font-weight:bold;text-align:left;">${dc}</td>
-          <td style="${border}font-weight:bold;text-align:center;">${sifoj}</td>
+          <td style="${border}font-weight:bold;text-align:center;">${formatSifojHtml(sifoj)}</td>
           <td style="${border}font-weight:bold;text-align:right;">${formatNumber(masa)}</td>
           <td style="${border}font-weight:bold;text-align:right;">${formatNumber(palete)}</td>
-        </tr>`
-    )
+        </tr>`;
+    })
     .join('');
 
   const totalRow = `
@@ -157,7 +198,7 @@ export default function LtlParser() {
   const sifojTable = report?.sifojTable;
 
   return (
-    <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl p-10 border-4 border-emerald-500 ring-8 ring-emerald-50">
+    <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl p-10 border-4 border-emerald-500 ring-8 ring-emerald-50">
       <header className="text-center mb-10">
         <h1 className="text-4xl font-black text-slate-900 tracking-tighter mb-2 uppercase">
           LTL izvestaj
@@ -317,22 +358,47 @@ export default function LtlParser() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sifojTable.rows.map(([dc, sifoj, masa, palete], idx) => (
-                    <tr key={`${dc}-${sifoj}-${idx}`} className="bg-white">
-                      <td className="bg-blue-600 text-white border border-slate-300 px-3 py-1.5 text-left">
-                        {dc}
-                      </td>
-                      <td className="border border-slate-300 px-3 py-1.5 text-center text-slate-900">
-                        {sifoj}
-                      </td>
-                      <td className="border border-slate-300 px-3 py-1.5 text-right text-slate-900 tabular-nums">
-                        {formatNumber(masa)}
-                      </td>
-                      <td className="border border-slate-300 px-3 py-1.5 text-right text-slate-900 tabular-nums">
-                        {formatNumber(palete)}
-                      </td>
-                    </tr>
-                  ))}
+                  {sifojTable.rows.map(([dc, sifoj, masa, palete], idx) => {
+                    const isSubtotal = !dc && !sifoj;
+                    return (
+                      <tr
+                        key={`${dc}-${sifoj}-${idx}`}
+                        className={isSubtotal ? 'bg-[#D9D9D9] h-[20px]' : 'bg-white'}
+                        style={isSubtotal ? { height: '20px' } : undefined}
+                      >
+                        <td
+                          className={`border border-slate-300 ${
+                            isSubtotal
+                              ? 'bg-[#D9D9D9] text-slate-900 px-3 py-0 h-[20px] leading-[20px]'
+                              : 'bg-blue-600 text-white px-3 py-1.5'
+                          } text-left font-bold`}
+                        >
+                          {dc}
+                        </td>
+                        <td
+                          className={`border border-slate-300 text-center font-bold ${
+                            isSubtotal ? 'px-3 py-0 h-[20px] leading-[20px]' : 'px-3 py-1.5'
+                          }`}
+                        >
+                          {renderSifoj(sifoj)}
+                        </td>
+                        <td
+                          className={`border border-slate-300 text-right text-slate-900 tabular-nums font-bold ${
+                            isSubtotal ? 'px-3 py-0 h-[20px] leading-[20px]' : 'px-3 py-1.5'
+                          }`}
+                        >
+                          {formatNumber(masa)}
+                        </td>
+                        <td
+                          className={`border border-slate-300 text-right text-slate-900 tabular-nums font-bold ${
+                            isSubtotal ? 'px-3 py-0 h-[20px] leading-[20px]' : 'px-3 py-1.5'
+                          }`}
+                        >
+                          {formatNumber(palete)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-100">
